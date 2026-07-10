@@ -8,8 +8,8 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
-const BOT_TOKEN = process.env.BOT_TOKEN || '';
-const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID || '';
+const BOT_TOKEN = (process.env.BOT_TOKEN || '').trim();
+const ADMIN_CHAT_ID = (process.env.ADMIN_CHAT_ID || '').trim();
 const PORT = Number(process.env.PORT || 3001);
 const ALLOW_DEV_INIT_DATA = process.env.ALLOW_DEV_INIT_DATA === 'true';
 
@@ -35,6 +35,7 @@ function validateTelegramInitData(initData: string): boolean {
   const hash = params.get('hash');
   if (!hash) return false;
   params.delete('hash');
+  params.delete('signature');
 
   const dataCheckString = [...params.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
