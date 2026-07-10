@@ -117,7 +117,7 @@ app.post('/api/orders', async (req, res) => {
     }
 
     const order = OrderSchema.parse(orderData);
-    const order = OrderSchema.parse(req.body);
+  
     const orderId = String(Date.now()).slice(-6);
     const user = isValid ? getTelegramUser(initData) : null;
 
