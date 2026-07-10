@@ -107,13 +107,16 @@ app.get('/health', (_req, res) => {
 
 app.post('/api/orders', async (req, res) => {
   try {
-    const initData = String(req.headers['x-telegram-init-data'] || '');
+    const body = req.body ?? {};
+    const initData = String(req.headers['x-telegram-init-data'] || body.initData || '');
+    const { initData: _ignored, ...orderData } = body;
     const isValid = initData ? validateTelegramInitData(initData) : false;
 
     if (!isValid && !ALLOW_DEV_INIT_DATA) {
       return res.status(401).json({ ok: false, error: 'Invalid Telegram initData' });
     }
 
+    const order = OrderSchema.parse(orderData);
     const order = OrderSchema.parse(req.body);
     const orderId = String(Date.now()).slice(-6);
     const user = isValid ? getTelegramUser(initData) : null;
