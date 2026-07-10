@@ -82,13 +82,12 @@ function App() {
     setError('');
     try {
       const res = await fetch(`${API_URL}/api/orders`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Telegram-Init-Data': tg?.initData || ''
-        },
-        body: JSON.stringify(form)
-      });
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({ ...form, initData: tg?.initData || '' })
+});
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || 'Не удалось оформить заказ');
       setOrderId(data.orderId);
