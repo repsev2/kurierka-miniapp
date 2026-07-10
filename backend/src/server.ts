@@ -5,11 +5,15 @@ import express from 'express';
 import { z } from 'zod';
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'X-Telegram-Init-Data']
+}));
 app.use(express.json({ limit: '1mb' }));
 
-const BOT_TOKEN = process.env.BOT_TOKEN || '';
-const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID || '';
+const BOT_TOKEN = (process.env.BOT_TOKEN || '').trim();
+const ADMIN_CHAT_ID = (process.env.ADMIN_CHAT_ID || '').trim();
 const PORT = Number(process.env.PORT || 3001);
 const ALLOW_DEV_INIT_DATA = process.env.ALLOW_DEV_INIT_DATA === 'true';
 
@@ -35,6 +39,7 @@ function validateTelegramInitData(initData: string): boolean {
   const hash = params.get('hash');
   if (!hash) return false;
   params.delete('hash');
+  params.delete('signature');
 
   const dataCheckString = [...params.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
@@ -44,7 +49,12 @@ function validateTelegramInitData(initData: string): boolean {
   const secretKey = crypto.createHmac('sha256', 'WebAppData').update(BOT_TOKEN).digest();
   const calculatedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
 
-  return crypto.timingSafeEqual(Buffer.from(calculatedHash), Buffer.from(hash));
+  if (calculatedHash.length !== hash.length) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(calculatedHash), Buffer.from(hash));
+  } catch {
+    return false;
+  }
 }
 
 function getTelegramUser(initData: string) {
@@ -101,7 +111,11 @@ async function sendTelegramMessage(text: string) {
 }
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true });
+  res.json({
+    ok: true,
+    botConfigured: Boolean(BOT_TOKEN),
+    adminConfigured: Boolean(ADMIN_CHAT_ID)
+  });
 });
 
 app.post('/api/orders', async (req, res) => {
@@ -119,13 +133,14 @@ app.post('/api/orders', async (req, res) => {
 
     await sendTelegramMessage(formatOrderMessage(order, orderId, user));
 
-    // Здесь можно добавить запись в Google Sheets / Supabase / CRM.
     console.log({ orderId, order, user });
 
     res.json({ ok: true, orderId });
   } catch (error) {
     console.error(error);
-    res.status(400).json({ ok: false, error: 'Order validation or processing failed' });
+    const message = error instanceof Error ? error.message : 'Order validation or processing failed';
+    const status = message.includes('Telegram sendMessage failed') ? 502 : 400;
+    res.status(status).json({ ok: false, error: message });
   }
 });
 
