@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: kurierka-backend
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: ADMIN_CHAT_ID
+        sync: false
+      - key: ALLOW_DEV_INIT_DATA
+        value: "false"

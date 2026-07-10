@@ -1,0 +1,69 @@
+:root {
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #2B2725;
+  background: #FCEADD;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: #FCEADD; }
+button, input, textarea, select { font: inherit; }
+button { cursor: pointer; border: 0; }
+
+.app {
+  min-height: 100vh;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+}
+
+.topbar { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; }
+.brand-mark { width: 42px; height: 42px; border-radius: 14px; background: #FF7000; color: white; display: grid; place-items: center; font-weight: 900; }
+.brand { font-weight: 900; font-size: 18px; }
+.muted { color: #7B6F68; font-size: 14px; line-height: 1.35; }
+
+.progress { height: 8px; border-radius: 999px; background: rgba(43,39,37,.1); margin: 8px 0 16px; overflow: hidden; }
+.progress span { display: block; height: 100%; border-radius: inherit; background: #FF7000; transition: width .25s ease; }
+
+.card { background: rgba(255,255,255,.78); border: 1px solid rgba(43,39,37,.08); border-radius: 28px; padding: 18px; box-shadow: 0 16px 40px rgba(65, 45, 30, .08); }
+h1 { margin: 16px 0 8px; font-size: 30px; line-height: 1.05; letter-spacing: -.03em; }
+h2 { margin: 0 0 14px; font-size: 24px; letter-spacing: -.02em; }
+p { line-height: 1.45; }
+
+.hero { text-align: left; }
+.product-visual { position: relative; height: 260px; border-radius: 24px; background: linear-gradient(135deg, #FFF7EF, #F7D8C2); overflow: hidden; }
+.door { position: absolute; left: 24px; bottom: 0; width: 120px; height: 225px; background: linear-gradient(90deg, #3C2922, #1F1512); border-radius: 14px 14px 0 0; }
+.box { position: absolute; right: 28px; bottom: 24px; width: 116px; height: 152px; border: 6px solid rgba(255,112,0,.75); border-radius: 12px; background: rgba(255,255,255,.34); backdrop-filter: blur(2px); display: flex; align-items: flex-start; justify-content: center; padding-top: 18px; font-weight: 900; font-size: 26px; color: #FF7000; }
+.shelf { position: absolute; left: 0; right: 0; top: 62%; border-top: 5px solid rgba(255,112,0,.55); }
+
+.primary, .secondary, .ghost { width: 100%; min-height: 52px; border-radius: 16px; font-weight: 800; margin-top: 10px; }
+.primary { background: #FF7000; color: #fff; box-shadow: 0 10px 24px rgba(255,112,0,.25); }
+.secondary { background: #F2E0D4; color: #2B2725; }
+.ghost { background: transparent; color: #FF7000; border: 1px solid rgba(255,112,0,.25); }
+.primary:disabled { opacity: .65; cursor: not-allowed; }
+
+.options { display: grid; gap: 10px; }
+.option { text-align: left; border-radius: 18px; padding: 14px; background: #FFF8F2; border: 2px solid transparent; display: grid; gap: 5px; color: #2B2725; }
+.option.selected { border-color: #FF7000; background: #FFF1E7; }
+.option span { color: #7B6F68; font-size: 14px; }
+.option strong { color: #FF7000; }
+
+.field { display: grid; gap: 7px; margin: 12px 0; font-weight: 800; }
+input, textarea, select { width: 100%; border: 1px solid rgba(43,39,37,.12); background: #fff; border-radius: 15px; padding: 14px; color: #2B2725; outline: none; }
+textarea { min-height: 84px; resize: vertical; }
+input:focus, textarea:focus, select:focus { border-color: #FF7000; box-shadow: 0 0 0 3px rgba(255,112,0,.12); }
+.check { display: flex; gap: 10px; align-items: center; margin: 12px 0; }
+.check input { width: 20px; height: 20px; }
+
+.footer { display: grid; grid-template-columns: .8fr 1.2fr; gap: 10px; margin-top: 18px; }
+.error { margin-top: 12px; color: #B42318; background: #FEE4E2; padding: 12px; border-radius: 14px; }
+.summary { display: grid; gap: 10px; background: #FFF8F2; padding: 14px; border-radius: 18px; }
+.row { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.row span { color: #7B6F68; }
+.row b { text-align: right; }
+.payment-box { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
+.chip { min-height: 46px; border-radius: 14px; background: #F2E0D4; color: #2B2725; font-weight: 800; }
+.chip.active { background: #FF7000; color: white; }
+.success { text-align: center; padding-top: 34px; }
+.success-icon { width: 72px; height: 72px; margin: 0 auto 14px; border-radius: 50%; display: grid; place-items: center; background: #12B76A; color: #fff; font-weight: 900; font-size: 38px; }
+
+@media (min-width: 520px) {
+  .app { max-width: 520px; margin: 0 auto; }
+}
