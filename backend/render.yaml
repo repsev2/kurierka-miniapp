@@ -12,3 +12,7 @@ services:
         sync: false
       - key: ALLOW_DEV_INIT_DATA
         value: "false"
+      - key: FRONTEND_URL
+        value: "https://kurierka-miniapp.vercel.app"
+      - key: PUBLIC_URL
+        value: "https://kurierka-backend.onrender.com"

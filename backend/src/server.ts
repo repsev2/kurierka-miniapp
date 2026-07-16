@@ -3,6 +3,8 @@ import crypto from 'node:crypto';
 import cors from 'cors';
 import express from 'express';
 import { z } from 'zod';
+import { createYookassaPayment, isYookassaConfigured, type YookassaNotification } from './yookassa.js';
+import { handleTelegramUpdate, sendTelegramMessage as sendBotMessage, setupTelegramWebhook, type TelegramUpdate } from './telegram.js';
 
 const app = express();
 app.use(cors({
@@ -28,29 +30,37 @@ const OrderSchema = z.object({
   address: z.string().min(5).max(250),
   deliveryType: z.enum(['moscow-courier', 'pickup-point', 'b2b-contact']),
   comment: z.string().max(500).optional().default(''),
-  paymentMethod: z.enum(['request', 'online-placeholder'])
+  paymentMethod: z.enum(['request', 'yookassa'])
 });
 
 type Order = z.infer<typeof OrderSchema>;
 
+const PRODUCT_PRICES = {
+  transparent: 5500,
+  'with-number': 5500,
+  b2b: 0
+} as const;
+
+const pendingOrders = new Map<string, Order>();
+
 function validateTelegramInitData(initData: string): boolean {
   if (!BOT_TOKEN) return false;
-  const params = new URLSearchParams(initData);
-  const hash = params.get('hash');
-  if (!hash) return false;
-  params.delete('hash');
-  params.delete('signature');
-
-  const dataCheckString = [...params.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, value]) => `${key}=${value}`)
-    .join('\n');
-
-  const secretKey = crypto.createHmac('sha256', 'WebAppData').update(BOT_TOKEN).digest();
-  const calculatedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
-
-  if (calculatedHash.length !== hash.length) return false;
   try {
+    const params = new URLSearchParams(initData);
+    const hash = params.get('hash');
+    if (!hash) return false;
+    params.delete('hash');
+    params.delete('signature');
+
+    const dataCheckString = [...params.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, value]) => `${key}=${value}`)
+      .join('\n');
+
+    const secretKey = crypto.createHmac('sha256', 'WebAppData').update(BOT_TOKEN).digest();
+    const calculatedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
+
+    if (calculatedHash.length !== hash.length) return false;
     return crypto.timingSafeEqual(Buffer.from(calculatedHash), Buffer.from(hash));
   } catch {
     return false;
@@ -67,12 +77,20 @@ function getTelegramUser(initData: string) {
   }
 }
 
-function formatOrderMessage(order: Order, orderId: string, user: any) {
+function getOrderTotal(order: Order) {
+  if (order.product === 'b2b') return null;
+  return PRODUCT_PRICES[order.product] * order.quantity;
+}
+
+function formatOrderMessage(order: Order, orderId: string, user: any, extra = '') {
   const productLabel = {
     transparent: 'Прозрачная Курьерка',
     'with-number': 'Курьерка с номером квартиры',
     b2b: 'Опт / заказ для ЖК'
   }[order.product];
+
+  const total = getOrderTotal(order);
+  const paymentLabel = order.paymentMethod === 'yookassa' ? 'Оплата картой (ЮKassa)' : 'Заявка без онлайн-оплаты';
 
   const userLine = user
     ? `Telegram: @${user.username || 'без username'} / ID ${user.id}`
@@ -80,6 +98,7 @@ function formatOrderMessage(order: Order, orderId: string, user: any) {
 
   return [
     `🧡 Новый заказ Курьерки #${orderId}`,
+    extra,
     '',
     `Товар: ${productLabel}`,
     `Количество: ${order.quantity}`,
@@ -90,60 +109,116 @@ function formatOrderMessage(order: Order, orderId: string, user: any) {
     `Город: ${order.city}`,
     `Адрес/ПВЗ: ${order.address}`,
     `Доставка: ${order.deliveryType}`,
-    `Оплата: ${order.paymentMethod}`,
+    `Оплата: ${paymentLabel}`,
+    total === null ? 'Сумма: рассчитаем индивидуально' : `Сумма: ${total.toLocaleString('ru-RU')} ₽`,
     order.comment ? `Комментарий: ${order.comment}` : '',
     '',
     userLine
   ].filter(Boolean).join('\n');
 }
 
-async function sendTelegramMessage(text: string) {
-  if (!BOT_TOKEN || !ADMIN_CHAT_ID) return;
-  const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: ADMIN_CHAT_ID, text })
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Telegram sendMessage failed: ${body}`);
-  }
+async function sendAdminTelegramMessage(text: string) {
+  if (!ADMIN_CHAT_ID) throw new Error('ADMIN_CHAT_ID не настроен на сервере');
+  await sendBotMessage(ADMIN_CHAT_ID, text);
 }
 
 app.get('/health', (_req, res) => {
   res.json({
     ok: true,
     botConfigured: Boolean(BOT_TOKEN),
-    adminConfigured: Boolean(ADMIN_CHAT_ID)
+    adminConfigured: Boolean(ADMIN_CHAT_ID),
+    yookassaConfigured: isYookassaConfigured()
   });
+});
+
+app.post('/api/telegram/webhook', async (req, res) => {
+  try {
+    await handleTelegramUpdate(req.body as TelegramUpdate);
+    res.json({ ok: true });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ ok: false });
+  }
+});
+
+app.post('/api/payments/webhook', async (req, res) => {
+  try {
+    const notification = req.body as YookassaNotification;
+    if (notification.event === 'payment.succeeded' && notification.object?.status === 'succeeded') {
+      const orderId = notification.object.metadata?.orderId;
+      const order = orderId ? pendingOrders.get(orderId) : undefined;
+      const text = order
+        ? formatOrderMessage(order, orderId!, null, '✅ Оплата получена')
+        : `✅ Оплата получена по заказу #${orderId || 'неизвестно'}`;
+      await sendAdminTelegramMessage(text);
+      if (orderId) pendingOrders.delete(orderId);
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ ok: false });
+  }
 });
 
 app.post('/api/orders', async (req, res) => {
   try {
-    const initData = String(req.headers['x-telegram-init-data'] || '');
+    const body = req.body ?? {};
+    const initData = String(req.headers['x-telegram-init-data'] || body.initData || '');
+    const { initData: _ignored, ...orderData } = body;
     const isValid = initData ? validateTelegramInitData(initData) : false;
 
     if (!isValid && !ALLOW_DEV_INIT_DATA) {
       return res.status(401).json({ ok: false, error: 'Invalid Telegram initData' });
     }
 
-    const order = OrderSchema.parse(req.body);
+    const order = OrderSchema.parse(orderData);
     const orderId = String(Date.now()).slice(-6);
     const user = isValid ? getTelegramUser(initData) : null;
+    const total = getOrderTotal(order);
 
-    await sendTelegramMessage(formatOrderMessage(order, orderId, user));
+    if (order.paymentMethod === 'yookassa') {
+      if (total === null || total <= 0) {
+        return res.status(400).json({ ok: false, error: 'Для этого товара онлайн-оплата недоступна' });
+      }
+      if (!isYookassaConfigured()) {
+        return res.status(500).json({ ok: false, error: 'ЮKassa ещё не настроена. Напишите нам в Telegram.' });
+      }
 
+      pendingOrders.set(orderId, order);
+      const payment = await createYookassaPayment({
+        orderId,
+        amountRub: total,
+        description: `Заказ Курьерки #${orderId}`
+      });
+
+      if (!payment.paymentUrl) {
+        return res.status(502).json({ ok: false, error: 'ЮKassa не вернула ссылку на оплату' });
+      }
+
+      await sendAdminTelegramMessage(formatOrderMessage(order, orderId, user, '⏳ Ожидает оплаты'));
+      return res.json({ ok: true, orderId, paymentUrl: payment.paymentUrl, paymentId: payment.paymentId });
+    }
+
+    await sendAdminTelegramMessage(formatOrderMessage(order, orderId, user));
     console.log({ orderId, order, user });
-
     res.json({ ok: true, orderId });
   } catch (error) {
     console.error(error);
     const message = error instanceof Error ? error.message : 'Order validation or processing failed';
-    const status = message.includes('Telegram sendMessage failed') ? 502 : 400;
+    const status = message.includes('Telegram sendMessage failed') || message.includes('ЮKassa') ? 502
+      : message.includes('не настроен') ? 500
+      : 400;
     res.status(status).json({ ok: false, error: message });
   }
 });
 
+const PUBLIC_URL = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '').trim();
+
 app.listen(PORT, () => {
   console.log(`Kurierka backend is running on http://localhost:${PORT}`);
+  if (PUBLIC_URL) {
+    setupTelegramWebhook(PUBLIC_URL).catch((error) => {
+      console.error('Не удалось настроить Telegram webhook:', error);
+    });
+  }
 });
