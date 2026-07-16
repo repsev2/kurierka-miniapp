@@ -3,6 +3,7 @@ import cors from 'cors';
 import express from 'express';
 import { isValid } from '@tma.js/init-data-node';
 import { z } from 'zod';
+import { PRODUCTS, PRODUCT_IDS } from './catalog.js';
 import { createYookassaPayment, isYookassaConfigured, type YookassaNotification } from './yookassa.js';
 import { handleTelegramUpdate, sendTelegramMessage as sendBotMessage, setupTelegramWebhook, type TelegramUpdate } from './telegram.js';
 
@@ -24,33 +25,28 @@ const PORT = Number(process.env.PORT || 3001);
 const ALLOW_DEV_INIT_DATA = process.env.ALLOW_DEV_INIT_DATA === 'true';
 
 const OrderSchema = z.object({
-  product: z.enum(['transparent', 'with-number', 'b2b']),
-  quantity: z.number().int().min(1).max(1000),
+  items: z.array(z.object({
+    productId: z.enum(PRODUCT_IDS),
+    quantity: z.number().int().min(1).max(99)
+  })).min(1).max(50),
   apartmentNumber: z.string().max(20).optional().default(''),
   noApartmentNumber: z.boolean().optional().default(false),
   name: z.string().min(2).max(80),
   phone: z.string().min(7).max(30),
   city: z.string().min(2).max(80),
   address: z.string().min(5).max(250),
-  deliveryType: z.enum(['moscow-courier', 'pickup-point', 'b2b-contact']),
+  deliveryType: z.enum(['moscow-courier', 'pickup-point']),
   comment: z.string().max(500).optional().default(''),
   paymentMethod: z.enum(['request', 'yookassa'])
 });
 
 type Order = z.infer<typeof OrderSchema>;
 
-const PRODUCT_PRICES = {
-  transparent: 5500,
-  'with-number': 5500,
-  b2b: 0
-} as const;
-
 const pendingOrders = new Map<string, Order>();
 
 function validateTelegramInitData(initData: string): boolean {
   if (!BOT_TOKEN || !initData) return false;
   try {
-    // expiresIn: 0 — не отклонять из‑за «устаревшей» сессии Mini App
     return isValid(initData, BOT_TOKEN, { expiresIn: 0 });
   } catch {
     return false;
@@ -83,46 +79,51 @@ function extractInitData(req: express.Request) {
   const fromBody = typeof body.initData === 'string' ? body.initData.trim() : '';
   const headerRaw = req.headers['x-telegram-init-data'];
   const fromHeader = typeof headerRaw === 'string' ? headerRaw.trim() : '';
-  // JSON body надёжнее заголовка (прокси иногда портит длинные header)
   if (fromBody) return { initData: fromBody, source: 'body' as const };
   if (fromHeader) return { initData: fromHeader, source: 'header' as const };
   return { initData: '', source: 'none' as const };
 }
 
+function orderHasBox(order: Order) {
+  return order.items.some((item) => PRODUCTS[item.productId].kind === 'box');
+}
+
 function getOrderTotal(order: Order) {
-  if (order.product === 'b2b') return null;
-  return PRODUCT_PRICES[order.product] * order.quantity;
+  return order.items.reduce((sum, item) => sum + PRODUCTS[item.productId].price * item.quantity, 0);
 }
 
 function formatOrderMessage(order: Order, orderId: string, user: any, extra = '') {
-  const productLabel = {
-    transparent: 'Прозрачная Курьерка',
-    'with-number': 'Курьерка с номером квартиры',
-    b2b: 'Опт / заказ для ЖК'
-  }[order.product];
-
   const total = getOrderTotal(order);
   const paymentLabel = order.paymentMethod === 'yookassa' ? 'Оплата картой (ЮKassa)' : 'Заявка без онлайн-оплаты';
+  const itemLines = order.items.map((item) => {
+    const product = PRODUCTS[item.productId];
+    const lineTotal = product.price * item.quantity;
+    return `• ${product.title} × ${item.quantity} — ${lineTotal.toLocaleString('ru-RU')} ₽`;
+  });
 
   const userLine = user
     ? `Telegram: @${user.username || 'без username'} / ID ${user.id}`
     : 'Telegram: dev/test mode';
 
+  const apartmentLine = orderHasBox(order)
+    ? `Номер квартиры: ${order.noApartmentNumber ? 'не нужен' : order.apartmentNumber || 'не указан'}`
+    : '';
+
   return [
     `🧡 Новый заказ Курьерки #${orderId}`,
     extra,
     '',
-    `Товар: ${productLabel}`,
-    `Количество: ${order.quantity}`,
-    `Номер квартиры: ${order.noApartmentNumber ? 'не нужен' : order.apartmentNumber || 'не указан'}`,
+    'Состав:',
+    ...itemLines,
     '',
+    apartmentLine,
     `Имя: ${order.name}`,
     `Телефон: ${order.phone}`,
     `Город: ${order.city}`,
     `Адрес/ПВЗ: ${order.address}`,
     `Доставка: ${order.deliveryType}`,
     `Оплата: ${paymentLabel}`,
-    total === null ? 'Сумма: рассчитаем индивидуально' : `Сумма: ${total.toLocaleString('ru-RU')} ₽`,
+    `Сумма: ${total.toLocaleString('ru-RU')} ₽`,
     order.comment ? `Комментарий: ${order.comment}` : '',
     '',
     userLine
@@ -199,13 +200,18 @@ app.post('/api/orders', async (req, res) => {
     }
 
     const order = OrderSchema.parse(orderData);
+
+    if (orderHasBox(order) && !order.noApartmentNumber && !order.apartmentNumber.trim()) {
+      return res.status(400).json({ ok: false, error: 'Укажите номер квартиры или отметьте, что номер не нужен' });
+    }
+
     const orderId = String(Date.now()).slice(-6);
     const user = initDataValid ? getTelegramUser(initData) : null;
     const total = getOrderTotal(order);
 
     if (order.paymentMethod === 'yookassa') {
-      if (total === null || total <= 0) {
-        return res.status(400).json({ ok: false, error: 'Для этого товара онлайн-оплата недоступна' });
+      if (total <= 0) {
+        return res.status(400).json({ ok: false, error: 'Онлайн-оплата недоступна для этого заказа' });
       }
       if (!isYookassaConfigured()) {
         return res.status(500).json({ ok: false, error: 'ЮKassa ещё не настроена. Напишите нам в Telegram.' });

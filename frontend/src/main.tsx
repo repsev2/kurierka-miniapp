@@ -1,22 +1,16 @@
 import React, { useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { PRODUCTS, PRODUCT_MAP, formatPrice, type Product, type ProductId } from './catalog';
 import './styles.css';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
-const PRODUCTS = {
-  transparent: { title: 'Прозрачная Курьерка', price: 5500, subtitle: 'Базовая версия для заказов у двери' },
-  'with-number': { title: 'Курьерка с номером', price: 5500, subtitle: 'Добавим номер квартиры на бокс' },
-  b2b: { title: 'Опт / для ЖК', price: 0, subtitle: 'Для соседей, УК, застройщика или офиса' }
-} as const;
-
-type ProductKey = keyof typeof PRODUCTS;
-type DeliveryType = 'moscow-courier' | 'pickup-point' | 'b2b-contact';
+type Screen = 'home' | 'catalog' | 'product' | 'cart' | 'checkout' | 'pay' | 'success';
+type DeliveryType = 'moscow-courier' | 'pickup-point';
 type PaymentMethod = 'request' | 'yookassa';
+type CartItem = { productId: ProductId; quantity: number };
 
-type OrderForm = {
-  product: ProductKey;
-  quantity: number;
+type CheckoutForm = {
   apartmentNumber: string;
   noApartmentNumber: boolean;
   name: string;
@@ -28,9 +22,7 @@ type OrderForm = {
   paymentMethod: PaymentMethod;
 };
 
-const initialForm: OrderForm = {
-  product: 'with-number',
-  quantity: 1,
+const initialCheckout: CheckoutForm = {
   apartmentNumber: '',
   noApartmentNumber: false,
   name: '',
@@ -42,7 +34,22 @@ const initialForm: OrderForm = {
   paymentMethod: 'yookassa'
 };
 
-function validateDeliveryStep(form: OrderForm) {
+function cartHasBox(cart: CartItem[]) {
+  return cart.some((item) => PRODUCT_MAP[item.productId].kind === 'box');
+}
+
+function cartTotal(cart: CartItem[]) {
+  return cart.reduce((sum, item) => sum + PRODUCT_MAP[item.productId].price * item.quantity, 0);
+}
+
+function cartCount(cart: CartItem[]) {
+  return cart.reduce((sum, item) => sum + item.quantity, 0);
+}
+
+function validateCheckout(form: CheckoutForm, needsApartment: boolean) {
+  if (needsApartment && !form.noApartmentNumber && !form.apartmentNumber.trim()) {
+    return 'Укажите номер квартиры или отметьте, что номер не нужен.';
+  }
   if (!form.name.trim() || form.name.trim().length < 2) {
     return 'Укажите имя полностью — минимум 2 символа.';
   }
@@ -60,13 +67,16 @@ function validateDeliveryStep(form: OrderForm) {
 
 function App() {
   const tg = window.Telegram?.WebApp;
-  const [step, setStep] = useState(0);
-  const [form, setForm] = useState<OrderForm>(initialForm);
+  const [screen, setScreen] = useState<Screen>('home');
+  const [selectedId, setSelectedId] = useState<ProductId | null>(null);
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [checkout, setCheckout] = useState<CheckoutForm>(initialCheckout);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [orderId, setOrderId] = useState<string | null>(null);
   const [paidReturn, setPaidReturn] = useState(false);
   const [error, setError] = useState('');
   const [initData, setInitData] = useState('');
+  const [toast, setToast] = useState('');
 
   React.useEffect(() => {
     tg?.ready();
@@ -78,34 +88,71 @@ function App() {
     if (params.get('paid') === '1') {
       setPaidReturn(true);
       setOrderId(params.get('order'));
-      setStep(5);
+      setScreen('success');
     }
     return () => window.clearTimeout(timer);
   }, [tg]);
 
-  const total = useMemo(() => {
-    if (form.product === 'b2b') return null;
-    return PRODUCTS[form.product].price * form.quantity;
-  }, [form.product, form.quantity]);
+  const selected = selectedId ? PRODUCT_MAP[selectedId] : null;
+  const total = useMemo(() => cartTotal(cart), [cart]);
+  const count = useMemo(() => cartCount(cart), [cart]);
+  const needsApartment = useMemo(() => cartHasBox(cart), [cart]);
 
-  const update = <K extends keyof OrderForm>(key: K, value: OrderForm[K]) => {
-    setForm((prev) => ({ ...prev, [key]: value }));
+  const updateCheckout = <K extends keyof CheckoutForm>(key: K, value: CheckoutForm[K]) => {
+    setCheckout((prev) => ({ ...prev, [key]: value }));
   };
 
-  const next = () => {
+  const showToast = (message: string) => {
+    setToast(message);
+    window.setTimeout(() => setToast(''), 1800);
+  };
+
+  const addToCart = (productId: ProductId, quantity = 1) => {
+    setCart((prev) => {
+      const existing = prev.find((item) => item.productId === productId);
+      if (existing) {
+        return prev.map((item) =>
+          item.productId === productId
+            ? { ...item, quantity: Math.min(99, item.quantity + quantity) }
+            : item
+        );
+      }
+      return [...prev, { productId, quantity }];
+    });
+    tg?.HapticFeedback?.notificationOccurred('success');
+    showToast('Добавлено в корзину');
+  };
+
+  const setQuantity = (productId: ProductId, quantity: number) => {
+    setCart((prev) => {
+      if (quantity <= 0) return prev.filter((item) => item.productId !== productId);
+      return prev.map((item) => (item.productId === productId ? { ...item, quantity } : item));
+    });
+  };
+
+  const openProduct = (productId: ProductId) => {
+    setSelectedId(productId);
     setError('');
-    if (step === 2 && !form.noApartmentNumber && !form.apartmentNumber.trim()) {
-      setError('Укажите номер квартиры или отметьте, что номер не нужен.');
+    setScreen('product');
+  };
+
+  const goCheckout = () => {
+    setError('');
+    if (!cart.length) {
+      setError('Корзина пуста.');
       return;
     }
-    if (step === 3) {
-      const validationError = validateDeliveryStep(form);
-      if (validationError) {
-        setError(validationError);
-        return;
-      }
+    setScreen('checkout');
+  };
+
+  const goPay = () => {
+    setError('');
+    const validationError = validateCheckout(checkout, needsApartment);
+    if (validationError) {
+      setError(validationError);
+      return;
     }
-    setStep((s) => Math.min(s + 1, 4));
+    setScreen('pay');
   };
 
   const submitOrder = async () => {
@@ -113,14 +160,23 @@ function App() {
     setError('');
     try {
       const telegramInitData = initData || tg?.initData || '';
-      if (!telegramInitData) {
-        throw new Error('Откройте приложение через бота в Telegram (не в браузере) и попробуйте снова');
-      }
 
       const res = await fetch(`${API_URL}/api/orders`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...form, initData: telegramInitData })
+        body: JSON.stringify({
+          items: cart,
+          apartmentNumber: checkout.apartmentNumber,
+          noApartmentNumber: checkout.noApartmentNumber,
+          name: checkout.name,
+          phone: checkout.phone,
+          city: checkout.city,
+          address: checkout.address,
+          deliveryType: checkout.deliveryType,
+          comment: checkout.comment,
+          paymentMethod: checkout.paymentMethod,
+          initData: telegramInitData
+        })
       });
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || 'Не удалось оформить заказ');
@@ -131,12 +187,13 @@ function App() {
         tg?.HapticFeedback?.notificationOccurred('success');
         if (tg?.openLink) tg.openLink(data.paymentUrl);
         else window.open(data.paymentUrl, '_blank');
-        setStep(5);
+        setScreen('success');
         return;
       }
 
       tg?.HapticFeedback?.notificationOccurred('success');
-      setStep(5);
+      setCart([]);
+      setScreen('success');
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Не удалось отправить заказ';
       setError(message);
@@ -148,184 +205,299 @@ function App() {
 
   const submitLabel = isSubmitting
     ? 'Отправляем...'
-    : form.paymentMethod === 'yookassa' && total
-      ? `Оплатить ${total.toLocaleString('ru-RU')} ₽`
+    : checkout.paymentMethod === 'yookassa' && total
+      ? `Оплатить ${formatPrice(total)}`
       : 'Оформить заказ';
 
   return (
     <main className="app">
-      <header className="topbar">
-        <div className="brand-mark">К</div>
-        <div>
-          <div className="brand">Курьерка</div>
-          <div className="muted">Дом для ваших доставок</div>
-        </div>
-      </header>
+      {screen !== 'home' && screen !== 'success' && (
+        <TopBar
+          count={count}
+          onCatalog={() => { setError(''); setScreen('catalog'); }}
+          onCart={() => { setError(''); setScreen('cart'); }}
+          showBack={screen !== 'catalog'}
+          onBack={() => {
+            setError('');
+            if (screen === 'product') setScreen('catalog');
+            else if (screen === 'cart') setScreen('catalog');
+            else if (screen === 'checkout') setScreen('cart');
+            else if (screen === 'pay') setScreen('checkout');
+          }}
+        />
+      )}
 
-      {step < 5 && <Progress step={step} />}
+      {toast && <div className="toast">{toast}</div>}
 
-      {step === 0 && (
-        <section className="card hero">
-          <div className="badge">Доставка по Москве и регионам</div>
-          <div className="product-visual">
-            <div className="door"></div>
-            <div className="box">
-              <span>{form.noApartmentNumber ? '' : form.apartmentNumber || '48'}</span>
-              <div className="shelf"></div>
+      {screen === 'home' && (
+        <section className="hero-screen">
+          <div className="hero-media" style={{ backgroundImage: 'url(/products/hero.jpg)' }} />
+          <div className="hero-overlay">
+            <div className="brand-row">
+              <div className="brand-mark">К</div>
+              <div>
+                <div className="brand">Курьерка</div>
+                <div className="muted">Дом для ваших доставок</div>
+              </div>
             </div>
+            <h1>Современный бокс для доставок</h1>
+            <p>Заказы с маркетплейсов больше не на полу и не на ручке двери.</p>
+            <button className="btn btn-primary btn-large" onClick={() => setScreen('catalog')}>
+              Смотреть каталог
+            </button>
           </div>
-          <h1>Закажите Курьерку за минуту</h1>
-          <p>Бокс у двери, куда курьеры оставляют ваши заказы. Без пакетов на полу и ожидания звонка.</p>
-          <button className="btn btn-primary btn-large" onClick={next}>
-            <span className="btn-icon">🛒</span>
-            Заказать за 5 500 ₽
-          </button>
-          <button className="btn btn-outline" onClick={() => { update('product', 'b2b'); update('quantity', 50); setStep(1); }}>
-            Мне нужен опт / для ЖК
-          </button>
         </section>
       )}
 
-      {step === 1 && (
-        <section className="card">
-          <h2>Выберите формат</h2>
-          <div className="options">
-            {(Object.keys(PRODUCTS) as ProductKey[]).map((key) => (
-              <button key={key} className={`option ${form.product === key ? 'selected' : ''}`} onClick={() => update('product', key)}>
-                <div className="option-top">
-                  <b>{PRODUCTS[key].title}</b>
-                  <strong>{PRODUCTS[key].price ? `${PRODUCTS[key].price.toLocaleString('ru-RU')} ₽` : 'расчёт'}</strong>
+      {screen === 'catalog' && (
+        <section className="screen">
+          <h1 className="screen-title">Каталог</h1>
+          <p className="muted screen-lead">Выбирайте Курьерку и аксессуары</p>
+          <div className="product-grid">
+            {PRODUCTS.map((product) => (
+              <button key={product.id} className="product-card" onClick={() => openProduct(product.id)}>
+                <img src={product.image} alt={product.title} loading="lazy" />
+                <div className="product-card-body">
+                  <b>{product.title}</b>
+                  <span>{product.subtitle}</span>
+                  <strong>{formatPrice(product.price)}</strong>
                 </div>
-                <span>{PRODUCTS[key].subtitle}</span>
               </button>
             ))}
           </div>
-          {form.product === 'b2b' && (
-            <label className="field">Количество
-              <input type="number" min="50" value={form.quantity} onChange={(e) => update('quantity', Number(e.target.value))} />
-            </label>
+        </section>
+      )}
+
+      {screen === 'product' && selected && (
+        <ProductScreen
+          product={selected}
+          onAdd={() => addToCart(selected.id)}
+          onGoCart={() => setScreen('cart')}
+        />
+      )}
+
+      {screen === 'cart' && (
+        <section className="screen">
+          <h1 className="screen-title">Корзина</h1>
+          {!cart.length && <p className="muted">Пока пусто — добавьте товары из каталога.</p>}
+          <div className="cart-list">
+            {cart.map((item) => {
+              const product = PRODUCT_MAP[item.productId];
+              return (
+                <div key={item.productId} className="cart-row">
+                  <img src={product.image} alt={product.title} />
+                  <div className="cart-info">
+                    <b>{product.title}</b>
+                    <span>{formatPrice(product.price)}</span>
+                    <div className="qty">
+                      <button type="button" onClick={() => setQuantity(item.productId, item.quantity - 1)}>−</button>
+                      <span>{item.quantity}</span>
+                      <button type="button" onClick={() => setQuantity(item.productId, item.quantity + 1)}>+</button>
+                    </div>
+                  </div>
+                  <strong>{formatPrice(product.price * item.quantity)}</strong>
+                </div>
+              );
+            })}
+          </div>
+          {!!cart.length && (
+            <>
+              <div className="total-row">
+                <span>Итого</span>
+                <b>{formatPrice(total)}</b>
+              </div>
+              {error && <div className="error">{error}</div>}
+              <button className="btn btn-primary btn-large" onClick={goCheckout}>Оформить</button>
+            </>
           )}
-          <FooterButtons back={() => setStep(0)} next={next} />
+          {!cart.length && (
+            <button className="btn btn-primary btn-large" onClick={() => setScreen('catalog')}>В каталог</button>
+          )}
         </section>
       )}
 
-      {step === 2 && (
-        <section className="card">
-          <h2>Номер квартиры</h2>
-          <p className="muted">Добавим номер, чтобы курьеры быстрее находили вашу Курьерку.</p>
-          <label className="field">Номер квартиры
-            <input disabled={form.noApartmentNumber} value={form.apartmentNumber} onChange={(e) => update('apartmentNumber', e.target.value)} placeholder="Например, 48" />
-          </label>
-          <label className="check"><input type="checkbox" checked={form.noApartmentNumber} onChange={(e) => update('noApartmentNumber', e.target.checked)} /> Номер не нужен</label>
-          {error && <div className="error">{error}</div>}
-          <FooterButtons back={() => setStep(1)} next={next} />
-        </section>
-      )}
-
-      {step === 3 && (
-        <section className="card">
-          <h2>Доставка</h2>
+      {screen === 'checkout' && (
+        <section className="screen card-panel">
+          <h1 className="screen-title">Доставка</h1>
+          {needsApartment && (
+            <>
+              <label className="field">Номер квартиры
+                <input
+                  disabled={checkout.noApartmentNumber}
+                  value={checkout.apartmentNumber}
+                  onChange={(e) => updateCheckout('apartmentNumber', e.target.value)}
+                  placeholder="Например, 48"
+                />
+              </label>
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={checkout.noApartmentNumber}
+                  onChange={(e) => updateCheckout('noApartmentNumber', e.target.checked)}
+                />
+                Номер не нужен
+              </label>
+            </>
+          )}
           <label className="field">Имя
-            <input value={form.name} onChange={(e) => update('name', e.target.value)} placeholder="Например, Анна Иванова" />
-            <small>Минимум 2 символа</small>
+            <input value={checkout.name} onChange={(e) => updateCheckout('name', e.target.value)} placeholder="Например, Анна Иванова" />
           </label>
           <label className="field">Телефон
-            <input value={form.phone} onChange={(e) => update('phone', e.target.value)} placeholder="+7 999 123-45-67" />
-            <small>Минимум 7 символов</small>
+            <input value={checkout.phone} onChange={(e) => updateCheckout('phone', e.target.value)} placeholder="+7 999 123-45-67" />
           </label>
           <label className="field">Город
-            <input value={form.city} onChange={(e) => update('city', e.target.value)} />
+            <input value={checkout.city} onChange={(e) => updateCheckout('city', e.target.value)} />
           </label>
           <label className="field">Адрес / ПВЗ
-            <textarea value={form.address} onChange={(e) => update('address', e.target.value)} placeholder="Улица, дом, квартира или пункт выдачи" />
-            <small>Минимум 5 символов</small>
+            <textarea value={checkout.address} onChange={(e) => updateCheckout('address', e.target.value)} placeholder="Улица, дом, квартира или пункт выдачи" />
           </label>
           <label className="field">Тип доставки
-            <select value={form.deliveryType} onChange={(e) => update('deliveryType', e.target.value as DeliveryType)}>
+            <select value={checkout.deliveryType} onChange={(e) => updateCheckout('deliveryType', e.target.value as DeliveryType)}>
               <option value="moscow-courier">Москва — доставка курьером</option>
               <option value="pickup-point">Регион — отправка в ПВЗ</option>
-              <option value="b2b-contact">Опт / ЖК — связаться для расчёта</option>
             </select>
           </label>
           <label className="field">Комментарий
-            <textarea value={form.comment} onChange={(e) => update('comment', e.target.value)} placeholder="Код домофона, удобное время, пожелания" />
+            <textarea value={checkout.comment} onChange={(e) => updateCheckout('comment', e.target.value)} placeholder="Код домофона, удобное время, пожелания" />
           </label>
           {error && <div className="error">{error}</div>}
-          <FooterButtons back={() => setStep(2)} next={next} />
+          <button className="btn btn-primary btn-large" onClick={goPay}>К оплате · {formatPrice(total)}</button>
         </section>
       )}
 
-      {step === 4 && (
-        <section className="card">
-          <h2>Проверьте заказ</h2>
+      {screen === 'pay' && (
+        <section className="screen card-panel">
+          <h1 className="screen-title">Оплата</h1>
           <div className="summary">
-            <Row label="Товар" value={PRODUCTS[form.product].title} />
-            <Row label="Количество" value={String(form.quantity)} />
-            <Row label="Номер" value={form.noApartmentNumber ? 'не нужен' : form.apartmentNumber} />
-            <Row label="Город" value={form.city} />
-            <Row label="Сумма" value={total === null ? 'рассчитаем индивидуально' : `${total.toLocaleString('ru-RU')} ₽`} />
+            {cart.map((item) => (
+              <Row
+                key={item.productId}
+                label={`${PRODUCT_MAP[item.productId].title} × ${item.quantity}`}
+                value={formatPrice(PRODUCT_MAP[item.productId].price * item.quantity)}
+              />
+            ))}
+            <Row label="Сумма" value={formatPrice(total)} />
           </div>
 
           <p className="section-label">Способ оплаты</p>
           <div className="payment-box">
             <button
-              className={`pay-card ${form.paymentMethod === 'yookassa' ? 'active' : ''}`}
-              onClick={() => update('paymentMethod', 'yookassa')}
-              disabled={total === null}
+              className={`pay-card ${checkout.paymentMethod === 'yookassa' ? 'active' : ''}`}
+              onClick={() => updateCheckout('paymentMethod', 'yookassa')}
             >
-              <span className="pay-icon">💳</span>
               <b>Оплатить картой</b>
               <span>ЮKassa · СБП · карта</span>
             </button>
             <button
-              className={`pay-card ${form.paymentMethod === 'request' ? 'active' : ''}`}
-              onClick={() => update('paymentMethod', 'request')}
+              className={`pay-card ${checkout.paymentMethod === 'request' ? 'active' : ''}`}
+              onClick={() => updateCheckout('paymentMethod', 'request')}
             >
-              <span className="pay-icon">📝</span>
               <b>Оставить заявку</b>
               <span>Свяжемся и уточним детали</span>
             </button>
           </div>
 
           {error && <div className="error">{error}</div>}
-          <FooterButtons back={() => setStep(3)} next={submitOrder} nextText={submitLabel} disabled={isSubmitting} />
+          <button className="btn btn-primary btn-large" disabled={isSubmitting} onClick={submitOrder}>
+            {submitLabel}
+          </button>
         </section>
       )}
 
-      {step === 5 && (
-        <section className="card success">
+      {screen === 'success' && (
+        <section className="screen card-panel success">
           <div className="success-icon">✓</div>
-          <h1>{paidReturn ? 'Оплата прошла' : form.paymentMethod === 'yookassa' ? 'Переходим к оплате' : 'Заказ принят'}</h1>
+          <h1>
+            {paidReturn
+              ? 'Оплата прошла'
+              : checkout.paymentMethod === 'yookassa'
+                ? 'Переходим к оплате'
+                : 'Заказ принят'}
+          </h1>
           {orderId && <p>Номер заказа: <b>#{orderId}</b></p>}
           <p className="muted">
             {paidReturn
               ? 'Спасибо! Мы получили оплату и скоро свяжемся с вами.'
-              : form.paymentMethod === 'yookassa'
+              : checkout.paymentMethod === 'yookassa'
                 ? 'Откроется страница ЮKassa. После оплаты мы пришлём подтверждение в Telegram.'
                 : 'Мы получили заявку и свяжемся с вами в Telegram или по телефону.'}
           </p>
-          <button className="btn btn-primary btn-large" onClick={() => tg?.close()}>Закрыть</button>
+          <button className="btn btn-primary btn-large" onClick={() => tg?.close?.() || setScreen('catalog')}>
+            Закрыть
+          </button>
         </section>
       )}
     </main>
   );
 }
 
-function Progress({ step }: { step: number }) {
-  return <div className="progress"><span style={{ width: `${Math.max(12, (step + 1) * 20)}%` }} /></div>;
+function TopBar({
+  count,
+  onCatalog,
+  onCart,
+  showBack,
+  onBack
+}: {
+  count: number;
+  onCatalog: () => void;
+  onCart: () => void;
+  showBack: boolean;
+  onBack: () => void;
+}) {
+  return (
+    <header className="topbar">
+      {showBack ? (
+        <button className="icon-btn" onClick={onBack} aria-label="Назад">←</button>
+      ) : (
+        <button className="brand-chip" onClick={onCatalog}>Курьерка</button>
+      )}
+      <button className="cart-btn" onClick={onCart}>
+        Корзина{count > 0 ? ` · ${count}` : ''}
+      </button>
+    </header>
+  );
 }
 
-function FooterButtons({ back, next, nextText = 'Продолжить', disabled = false }: { back: () => void; next: () => void; nextText?: string; disabled?: boolean }) {
+function ProductScreen({
+  product,
+  onAdd,
+  onGoCart
+}: {
+  product: Product;
+  onAdd: () => void;
+  onGoCart: () => void;
+}) {
   return (
-    <div className="footer">
-      <button className="btn btn-secondary" onClick={back}>Назад</button>
-      <button className="btn btn-primary" disabled={disabled} onClick={next}>{nextText}</button>
-    </div>
+    <section className="screen">
+      <div className="product-hero">
+        <img src={product.image} alt={product.title} />
+      </div>
+      <div className="card-panel product-details">
+        <h1>{product.title}</h1>
+        <strong className="price">{formatPrice(product.price)}</strong>
+        <p>{product.description}</p>
+        {product.includes && (
+          <>
+            <p className="section-label">Комплектация</p>
+            <ul className="includes">
+              {product.includes.map((line) => <li key={line}>{line}</li>)}
+            </ul>
+          </>
+        )}
+        <button className="btn btn-primary btn-large" onClick={onAdd}>В корзину</button>
+        <button className="btn btn-outline" onClick={onGoCart}>Перейти в корзину</button>
+      </div>
+    </section>
   );
 }
 
 function Row({ label, value }: { label: string; value: string }) {
-  return <div className="row"><span>{label}</span><b>{value || '—'}</b></div>;
+  return (
+    <div className="row">
+      <span>{label}</span>
+      <b>{value}</b>
+    </div>
+  );
 }
 
 createRoot(document.getElementById('root')!).render(<App />);
