@@ -1,4 +1,4 @@
-const BOT_TOKEN = (process.env.BOT_TOKEN || '').trim();
+const BOT_TOKEN = (process.env.BOT_TOKEN || '').trim().replace(/^['"]|['"]$/g, '').replace(/\s+/g, '');
 const FRONTEND_URL = (process.env.FRONTEND_URL || 'https://kurierka-miniapp.vercel.app').replace(/\/$/, '');
 
 type TelegramUser = {

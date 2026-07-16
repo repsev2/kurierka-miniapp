@@ -71,13 +71,16 @@ function App() {
   React.useEffect(() => {
     tg?.ready();
     tg?.expand();
-    setInitData(tg?.initData || '');
+    const captureInitData = () => setInitData(tg?.initData || '');
+    captureInitData();
+    const timer = window.setTimeout(captureInitData, 400);
     const params = new URLSearchParams(window.location.search);
     if (params.get('paid') === '1') {
       setPaidReturn(true);
       setOrderId(params.get('order'));
       setStep(5);
     }
+    return () => window.clearTimeout(timer);
   }, [tg]);
 
   const total = useMemo(() => {
@@ -116,10 +119,7 @@ function App() {
 
       const res = await fetch(`${API_URL}/api/orders`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Telegram-Init-Data': telegramInitData
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...form, initData: telegramInitData })
       });
       const data = await res.json();

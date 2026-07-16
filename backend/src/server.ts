@@ -1,7 +1,7 @@
 import 'dotenv/config';
-import crypto from 'node:crypto';
 import cors from 'cors';
 import express from 'express';
+import { isValid } from '@tma.js/init-data-node';
 import { z } from 'zod';
 import { createYookassaPayment, isYookassaConfigured, type YookassaNotification } from './yookassa.js';
 import { handleTelegramUpdate, sendTelegramMessage as sendBotMessage, setupTelegramWebhook, type TelegramUpdate } from './telegram.js';
@@ -15,7 +15,7 @@ app.use(cors({
 app.use(express.json({ limit: '1mb' }));
 
 function cleanEnv(value: string | undefined) {
-  return (value || '').trim().replace(/^['"]|['"]$/g, '');
+  return (value || '').trim().replace(/^['"]|['"]$/g, '').replace(/\s+/g, '');
 }
 
 const BOT_TOKEN = cleanEnv(process.env.BOT_TOKEN);
@@ -50,34 +50,20 @@ const pendingOrders = new Map<string, Order>();
 function validateTelegramInitData(initData: string): boolean {
   if (!BOT_TOKEN || !initData) return false;
   try {
-    const params = new URLSearchParams(initData);
-    const hash = params.get('hash');
-    if (!hash) return false;
-    params.delete('hash');
-    params.delete('signature');
-
-    const dataCheckString = [...params.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([key, value]) => `${key}=${value}`)
-      .join('\n');
-
-    const secretKey = crypto.createHmac('sha256', 'WebAppData').update(BOT_TOKEN).digest();
-    const calculatedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
-
-    if (calculatedHash.length !== hash.length) return false;
-    return crypto.timingSafeEqual(Buffer.from(calculatedHash), Buffer.from(hash));
+    // expiresIn: 0 — не отклонять из‑за «устаревшей» сессии Mini App
+    return isValid(initData, BOT_TOKEN, { expiresIn: 0 });
   } catch {
     return false;
   }
 }
 
-function getInitDataError(initData: string, isValid: boolean) {
+function getInitDataError(initData: string, valid: boolean) {
   if (!BOT_TOKEN) return 'BOT_TOKEN не настроен на сервере';
   if (!initData) {
     return 'Откройте приложение через бота в Telegram (не в браузере) и попробуйте снова';
   }
-  if (!isValid) {
-    return 'Не удалось проверить Telegram. Убедитесь, что BOT_TOKEN на Render — от того же бота, где открыто приложение';
+  if (!valid) {
+    return 'Не удалось проверить данные Telegram. Закройте мини‑приложение, откройте бота заново и нажмите «Заказать Курьерку»';
   }
   return 'Invalid Telegram initData';
 }
@@ -90,6 +76,17 @@ function getTelegramUser(initData: string) {
   } catch {
     return null;
   }
+}
+
+function extractInitData(req: express.Request) {
+  const body = req.body ?? {};
+  const fromBody = typeof body.initData === 'string' ? body.initData.trim() : '';
+  const headerRaw = req.headers['x-telegram-init-data'];
+  const fromHeader = typeof headerRaw === 'string' ? headerRaw.trim() : '';
+  // JSON body надёжнее заголовка (прокси иногда портит длинные header)
+  if (fromBody) return { initData: fromBody, source: 'body' as const };
+  if (fromHeader) return { initData: fromHeader, source: 'header' as const };
+  return { initData: '', source: 'none' as const };
 }
 
 function getOrderTotal(order: Order) {
@@ -178,22 +175,32 @@ app.post('/api/payments/webhook', async (req, res) => {
 app.post('/api/orders', async (req, res) => {
   try {
     const body = req.body ?? {};
-    const initData = String(req.headers['x-telegram-init-data'] || body.initData || '').trim();
+    const { initData, source } = extractInitData(req);
     const { initData: _ignored, ...orderData } = body;
-    const isValid = validateTelegramInitData(initData);
+    const initDataValid = validateTelegramInitData(initData);
 
-    if (!isValid && !ALLOW_DEV_INIT_DATA) {
+    if (!initDataValid && !ALLOW_DEV_INIT_DATA) {
       console.warn('initData rejected', {
+        source,
         hasInitData: Boolean(initData),
+        initDataLength: initData.length,
         hasHash: initData.includes('hash='),
         botTokenLength: BOT_TOKEN.length
       });
-      return res.status(401).json({ ok: false, error: getInitDataError(initData, isValid) });
+      return res.status(401).json({
+        ok: false,
+        error: getInitDataError(initData, initDataValid),
+        debug: {
+          source,
+          hasInitData: Boolean(initData),
+          initDataLength: initData.length
+        }
+      });
     }
 
     const order = OrderSchema.parse(orderData);
     const orderId = String(Date.now()).slice(-6);
-    const user = isValid ? getTelegramUser(initData) : null;
+    const user = initDataValid ? getTelegramUser(initData) : null;
     const total = getOrderTotal(order);
 
     if (order.paymentMethod === 'yookassa') {
