@@ -66,10 +66,12 @@ function App() {
   const [orderId, setOrderId] = useState<string | null>(null);
   const [paidReturn, setPaidReturn] = useState(false);
   const [error, setError] = useState('');
+  const [initData, setInitData] = useState('');
 
   React.useEffect(() => {
     tg?.ready();
     tg?.expand();
+    setInitData(tg?.initData || '');
     const params = new URLSearchParams(window.location.search);
     if (params.get('paid') === '1') {
       setPaidReturn(true);
@@ -107,10 +109,18 @@ function App() {
     setIsSubmitting(true);
     setError('');
     try {
+      const telegramInitData = initData || tg?.initData || '';
+      if (!telegramInitData) {
+        throw new Error('Откройте приложение через бота в Telegram (не в браузере) и попробуйте снова');
+      }
+
       const res = await fetch(`${API_URL}/api/orders`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...form, initData: tg?.initData || '' })
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Telegram-Init-Data': telegramInitData
+        },
+        body: JSON.stringify({ ...form, initData: telegramInitData })
       });
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || 'Не удалось оформить заказ');

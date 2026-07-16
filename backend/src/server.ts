@@ -14,8 +14,12 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '1mb' }));
 
-const BOT_TOKEN = (process.env.BOT_TOKEN || '').trim();
-const ADMIN_CHAT_ID = (process.env.ADMIN_CHAT_ID || '').trim();
+function cleanEnv(value: string | undefined) {
+  return (value || '').trim().replace(/^['"]|['"]$/g, '');
+}
+
+const BOT_TOKEN = cleanEnv(process.env.BOT_TOKEN);
+const ADMIN_CHAT_ID = cleanEnv(process.env.ADMIN_CHAT_ID);
 const PORT = Number(process.env.PORT || 3001);
 const ALLOW_DEV_INIT_DATA = process.env.ALLOW_DEV_INIT_DATA === 'true';
 
@@ -44,7 +48,7 @@ const PRODUCT_PRICES = {
 const pendingOrders = new Map<string, Order>();
 
 function validateTelegramInitData(initData: string): boolean {
-  if (!BOT_TOKEN) return false;
+  if (!BOT_TOKEN || !initData) return false;
   try {
     const params = new URLSearchParams(initData);
     const hash = params.get('hash');
@@ -65,6 +69,17 @@ function validateTelegramInitData(initData: string): boolean {
   } catch {
     return false;
   }
+}
+
+function getInitDataError(initData: string, isValid: boolean) {
+  if (!BOT_TOKEN) return 'BOT_TOKEN не настроен на сервере';
+  if (!initData) {
+    return 'Откройте приложение через бота в Telegram (не в браузере) и попробуйте снова';
+  }
+  if (!isValid) {
+    return 'Не удалось проверить Telegram. Убедитесь, что BOT_TOKEN на Render — от того же бота, где открыто приложение';
+  }
+  return 'Invalid Telegram initData';
 }
 
 function getTelegramUser(initData: string) {
@@ -163,12 +178,17 @@ app.post('/api/payments/webhook', async (req, res) => {
 app.post('/api/orders', async (req, res) => {
   try {
     const body = req.body ?? {};
-    const initData = String(req.headers['x-telegram-init-data'] || body.initData || '');
+    const initData = String(req.headers['x-telegram-init-data'] || body.initData || '').trim();
     const { initData: _ignored, ...orderData } = body;
-    const isValid = initData ? validateTelegramInitData(initData) : false;
+    const isValid = validateTelegramInitData(initData);
 
     if (!isValid && !ALLOW_DEV_INIT_DATA) {
-      return res.status(401).json({ ok: false, error: 'Invalid Telegram initData' });
+      console.warn('initData rejected', {
+        hasInitData: Boolean(initData),
+        hasHash: initData.includes('hash='),
+        botTokenLength: BOT_TOKEN.length
+      });
+      return res.status(401).json({ ok: false, error: getInitDataError(initData, isValid) });
     }
 
     const order = OrderSchema.parse(orderData);
