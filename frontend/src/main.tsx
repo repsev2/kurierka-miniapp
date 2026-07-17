@@ -246,8 +246,10 @@ function App() {
 
       {screen === 'home' && (
         <section className="hero-screen">
-          <div className="hero-media" style={{ backgroundImage: 'url(/products/hero.jpg)' }} />
-          <div className="hero-dim" />
+          <div className="hero-photo-wrap">
+            <img className="hero-photo" src="/products/hero.jpg" alt="Курьерка" />
+            <div className="hero-dim" />
+          </div>
           <div className="hero-overlay">
             <img className="site-logo" src="/products/logo.svg" alt="Курьерка" />
             <h1>Курьерка</h1>
