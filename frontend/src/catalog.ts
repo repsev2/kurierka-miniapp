@@ -7,19 +7,24 @@ export type Product = {
   price: number;
   image: string;
   kind: ProductKind;
-  subtitle: string;
+  subtitle?: string;
   description: string;
   includes?: string[];
 };
 
-export const PRODUCTS: Product[] = [
+export const DELIVERY_PRICES = {
+  'moscow-courier': 600,
+  'pickup-point': 900
+} as const;
+
+export const BOXES: Product[] = [
   {
     id: 'classic',
-    title: 'Курьерка',
+    title: 'Прозрачная',
     price: 5500,
     image: '/products/classic.png',
     kind: 'box',
-    subtitle: 'Прозрачное оргстекло, графит',
+    subtitle: 'Оргстекло, графит · 43×22×50',
     description: 'Прозрачное оргстекло, цвет надписи и цифр: графит, размер: 43×22×50 см.',
     includes: [
       'Инструкция к Курьерке',
@@ -30,11 +35,11 @@ export const PRODUCTS: Product[] = [
   },
   {
     id: 'leo',
-    title: 'Курьерка Лео',
+    title: 'Лео',
     price: 7500,
-    image: '/products/leo.jpg',
+    image: '/products/leo.png',
     kind: 'box',
-    subtitle: 'Прозрачное оргстекло, принт Лео',
+    subtitle: 'Оргстекло, принт Лео · 43×22×50',
     description: 'Прозрачное оргстекло, цвет принта: Лео, размер: 43×22×50 см.',
     includes: [
       'Инструкция к Курьерке',
@@ -42,15 +47,17 @@ export const PRODUCTS: Product[] = [
       'Два комплекта наклеек номера квартиры',
       'Силиконовые ножки'
     ]
-  },
+  }
+];
+
+export const EXTRAS: Product[] = [
   {
     id: 'mat-orange',
     title: 'Коврик на полку оранжевый',
     price: 300,
     image: '/products/mat-orange.jpg',
     kind: 'accessory',
-    subtitle: 'Мягкая полка для заказов',
-    description: 'Оранжевый коврик на полку Курьерки — заказы лежат аккуратно и не скользят.'
+    description: 'Оранжевый коврик на полку Курьерки.'
   },
   {
     id: 'mat-graphite',
@@ -58,8 +65,7 @@ export const PRODUCTS: Product[] = [
     price: 300,
     image: '/products/mat-graphite.jpg',
     kind: 'accessory',
-    subtitle: 'Мягкая полка для заказов',
-    description: 'Графитовый коврик на полку Курьерки — заказы лежат аккуратно и не скользят.'
+    description: 'Графитовый коврик на полку Курьерки.'
   },
   {
     id: 'markers',
@@ -67,10 +73,11 @@ export const PRODUCTS: Product[] = [
     price: 350,
     image: '/products/markers.jpg',
     kind: 'accessory',
-    subtitle: 'Для подписи и декора',
     description: 'Акриловые маркеры, чтобы подписать или украсить Курьерку.'
   }
 ];
+
+export const PRODUCTS: Product[] = [...BOXES, ...EXTRAS];
 
 export const PRODUCT_MAP = Object.fromEntries(PRODUCTS.map((p) => [p.id, p])) as Record<ProductId, Product>;
 

@@ -64,7 +64,7 @@ function getOrderButtonMarkup() {
   return {
     reply_markup: {
       inline_keyboard: [[
-        { text: '🛒 Заказать Курьерку', web_app: { url: FRONTEND_URL } }
+        { text: '🛒 Выбрать Курьерку', web_app: { url: FRONTEND_URL } }
       ]]
     }
   };

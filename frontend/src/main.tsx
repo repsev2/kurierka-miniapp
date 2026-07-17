@@ -1,11 +1,20 @@
 import React, { useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { PRODUCTS, PRODUCT_MAP, formatPrice, type Product, type ProductId } from './catalog';
+import {
+  BOXES,
+  EXTRAS,
+  PRODUCT_MAP,
+  DELIVERY_PRICES,
+  formatPrice,
+  type ProductId
+} from './catalog';
 import './styles.css';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+const PRIVACY_URL = 'https://kurierka.ru/processingofpersonaldata';
+const OFFER_URL = 'https://kurierka.ru/oferta';
 
-type Screen = 'home' | 'catalog' | 'product' | 'cart' | 'checkout' | 'pay' | 'success';
+type Screen = 'home' | 'boxes' | 'extras' | 'checkout' | 'pay' | 'success';
 type DeliveryType = 'moscow-courier' | 'pickup-point';
 type PaymentMethod = 'request' | 'yookassa';
 type CartItem = { productId: ProductId; quantity: number };
@@ -19,6 +28,10 @@ type CheckoutForm = {
   address: string;
   deliveryType: DeliveryType;
   comment: string;
+  isGift: boolean;
+  giftMessage: string;
+  agreePrivacy: boolean;
+  agreeOffer: boolean;
   paymentMethod: PaymentMethod;
 };
 
@@ -31,24 +44,24 @@ const initialCheckout: CheckoutForm = {
   address: '',
   deliveryType: 'moscow-courier',
   comment: '',
+  isGift: false,
+  giftMessage: '',
+  agreePrivacy: false,
+  agreeOffer: false,
   paymentMethod: 'yookassa'
 };
-
-function cartHasBox(cart: CartItem[]) {
-  return cart.some((item) => PRODUCT_MAP[item.productId].kind === 'box');
-}
 
 function cartTotal(cart: CartItem[]) {
   return cart.reduce((sum, item) => sum + PRODUCT_MAP[item.productId].price * item.quantity, 0);
 }
 
-function cartCount(cart: CartItem[]) {
-  return cart.reduce((sum, item) => sum + item.quantity, 0);
+function getDeliveryPrice(type: DeliveryType) {
+  return DELIVERY_PRICES[type];
 }
 
-function validateCheckout(form: CheckoutForm, needsApartment: boolean) {
-  if (needsApartment && !form.noApartmentNumber && !form.apartmentNumber.trim()) {
-    return 'Укажите номер квартиры или отметьте, что номер не нужен.';
+function validateCheckout(form: CheckoutForm) {
+  if (!form.noApartmentNumber && !form.apartmentNumber.trim()) {
+    return 'Укажите номер квартиры для наклейки или отметьте, что номер не нужен.';
   }
   if (!form.name.trim() || form.name.trim().length < 2) {
     return 'Укажите имя полностью — минимум 2 символа.';
@@ -60,7 +73,15 @@ function validateCheckout(form: CheckoutForm, needsApartment: boolean) {
     return 'Укажите город.';
   }
   if (!form.address.trim() || form.address.trim().length < 5) {
-    return 'Укажите адрес полностью — минимум 5 символов.';
+    return form.deliveryType === 'pickup-point'
+      ? 'Укажите адрес ПВЗ Яндекс.Маркета.'
+      : 'Укажите полный адрес доставки.';
+  }
+  if (form.isGift && form.giftMessage.trim().length < 2) {
+    return 'Напишите пожелание для открытки.';
+  }
+  if (!form.agreePrivacy || !form.agreeOffer) {
+    return 'Нужно согласие на обработку персональных данных и с условиями оферты.';
   }
   return '';
 }
@@ -68,7 +89,6 @@ function validateCheckout(form: CheckoutForm, needsApartment: boolean) {
 function App() {
   const tg = window.Telegram?.WebApp;
   const [screen, setScreen] = useState<Screen>('home');
-  const [selectedId, setSelectedId] = useState<ProductId | null>(null);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [checkout, setCheckout] = useState<CheckoutForm>(initialCheckout);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -93,10 +113,13 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [tg]);
 
-  const selected = selectedId ? PRODUCT_MAP[selectedId] : null;
-  const total = useMemo(() => cartTotal(cart), [cart]);
-  const count = useMemo(() => cartCount(cart), [cart]);
-  const needsApartment = useMemo(() => cartHasBox(cart), [cart]);
+  const productsTotal = useMemo(() => cartTotal(cart), [cart]);
+  const deliveryPrice = getDeliveryPrice(checkout.deliveryType);
+  const total = productsTotal + (cart.length ? deliveryPrice : 0);
+  const selectedBox = cart.find((item) => PRODUCT_MAP[item.productId].kind === 'box');
+  const addressPlaceholder = checkout.deliveryType === 'pickup-point'
+    ? 'Адрес ПВЗ Яндекс.Маркета'
+    : 'Полный адрес: улица, дом, квартира';
 
   const updateCheckout = <K extends keyof CheckoutForm>(key: K, value: CheckoutForm[K]) => {
     setCheckout((prev) => ({ ...prev, [key]: value }));
@@ -104,50 +127,43 @@ function App() {
 
   const showToast = (message: string) => {
     setToast(message);
-    window.setTimeout(() => setToast(''), 1800);
+    window.setTimeout(() => setToast(''), 1600);
   };
 
-  const addToCart = (productId: ProductId, quantity = 1) => {
+  const selectBox = (productId: ProductId) => {
     setCart((prev) => {
-      const existing = prev.find((item) => item.productId === productId);
-      if (existing) {
-        return prev.map((item) =>
-          item.productId === productId
-            ? { ...item, quantity: Math.min(99, item.quantity + quantity) }
-            : item
-        );
-      }
-      return [...prev, { productId, quantity }];
+      const extras = prev.filter((item) => PRODUCT_MAP[item.productId].kind === 'accessory');
+      return [{ productId, quantity: 1 }, ...extras];
     });
-    tg?.HapticFeedback?.notificationOccurred('success');
-    showToast('Добавлено в корзину');
-  };
-
-  const setQuantity = (productId: ProductId, quantity: number) => {
-    setCart((prev) => {
-      if (quantity <= 0) return prev.filter((item) => item.productId !== productId);
-      return prev.map((item) => (item.productId === productId ? { ...item, quantity } : item));
-    });
-  };
-
-  const openProduct = (productId: ProductId) => {
-    setSelectedId(productId);
     setError('');
-    setScreen('product');
+    setScreen('extras');
+    tg?.HapticFeedback?.notificationOccurred('success');
   };
+
+  const toggleExtra = (productId: ProductId) => {
+    setCart((prev) => {
+      const exists = prev.find((item) => item.productId === productId);
+      if (exists) return prev.filter((item) => item.productId !== productId);
+      return [...prev, { productId, quantity: 1 }];
+    });
+    showToast('Корзина обновлена');
+  };
+
+  const hasExtra = (productId: ProductId) => cart.some((item) => item.productId === productId);
 
   const goCheckout = () => {
-    setError('');
-    if (!cart.length) {
-      setError('Корзина пуста.');
+    if (!selectedBox) {
+      setError('Сначала выберите Курьерку.');
+      setScreen('boxes');
       return;
     }
+    setError('');
     setScreen('checkout');
   };
 
   const goPay = () => {
     setError('');
-    const validationError = validateCheckout(checkout, needsApartment);
+    const validationError = validateCheckout(checkout);
     if (validationError) {
       setError(validationError);
       return;
@@ -160,7 +176,6 @@ function App() {
     setError('');
     try {
       const telegramInitData = initData || tg?.initData || '';
-
       const res = await fetch(`${API_URL}/api/orders`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -174,6 +189,10 @@ function App() {
           address: checkout.address,
           deliveryType: checkout.deliveryType,
           comment: checkout.comment,
+          isGift: checkout.isGift,
+          giftMessage: checkout.giftMessage,
+          agreePrivacy: checkout.agreePrivacy,
+          agreeOffer: checkout.agreeOffer,
           paymentMethod: checkout.paymentMethod,
           initData: telegramInitData
         })
@@ -205,7 +224,7 @@ function App() {
 
   const submitLabel = isSubmitting
     ? 'Отправляем...'
-    : checkout.paymentMethod === 'yookassa' && total
+    : checkout.paymentMethod === 'yookassa'
       ? `Оплатить ${formatPrice(total)}`
       : 'Оформить заказ';
 
@@ -213,15 +232,11 @@ function App() {
     <main className="app">
       {screen !== 'home' && screen !== 'success' && (
         <TopBar
-          count={count}
-          onCatalog={() => { setError(''); setScreen('catalog'); }}
-          onCart={() => { setError(''); setScreen('cart'); }}
-          showBack={screen !== 'catalog'}
           onBack={() => {
             setError('');
-            if (screen === 'product') setScreen('catalog');
-            else if (screen === 'cart') setScreen('catalog');
-            else if (screen === 'checkout') setScreen('cart');
+            if (screen === 'boxes') setScreen('home');
+            else if (screen === 'extras') setScreen('boxes');
+            else if (screen === 'checkout') setScreen('extras');
             else if (screen === 'pay') setScreen('checkout');
           }}
         />
@@ -232,35 +247,32 @@ function App() {
       {screen === 'home' && (
         <section className="hero-screen">
           <div className="hero-media" style={{ backgroundImage: 'url(/products/hero.jpg)' }} />
+          <div className="hero-dim" />
           <div className="hero-overlay">
-            <div className="brand-row">
-              <div className="brand-mark">К</div>
-              <div>
-                <div className="brand">Курьерка</div>
-                <div className="muted">Дом для ваших доставок</div>
-              </div>
-            </div>
-            <h1>Современный бокс для доставок</h1>
-            <p>Заказы с маркетплейсов больше не на полу и не на ручке двери.</p>
-            <button className="btn btn-primary btn-large" onClick={() => setScreen('catalog')}>
-              Смотреть каталог
+            <img className="site-logo" src="/products/logo.svg" alt="Курьерка" />
+            <h1>Курьерка</h1>
+            <p>Курьеры оставляют ваши заказы в Курьерке — вы забираете их, когда вам удобно</p>
+            <button className="btn btn-primary btn-large" onClick={() => setScreen('boxes')}>
+              Выбрать Курьерку
             </button>
           </div>
         </section>
       )}
 
-      {screen === 'catalog' && (
+      {screen === 'boxes' && (
         <section className="screen">
-          <h1 className="screen-title">Каталог</h1>
-          <p className="muted screen-lead">Выбирайте Курьерку и аксессуары</p>
-          <div className="product-grid">
-            {PRODUCTS.map((product) => (
-              <button key={product.id} className="product-card" onClick={() => openProduct(product.id)}>
-                <img src={product.image} alt={product.title} loading="lazy" />
-                <div className="product-card-body">
-                  <b>{product.title}</b>
-                  <span>{product.subtitle}</span>
-                  <strong>{formatPrice(product.price)}</strong>
+          <h1 className="screen-title">Выберите Курьерку</h1>
+          <p className="muted screen-lead">Два формата — прозрачная и Лео</p>
+          <div className="box-list">
+            {BOXES.map((product) => (
+              <button key={product.id} className="box-card" onClick={() => selectBox(product.id)}>
+                <img src={product.image} alt={product.title} />
+                <div className="box-card-body">
+                  <div className="box-card-top">
+                    <b>{product.title}</b>
+                    <strong>{formatPrice(product.price)}</strong>
+                  </div>
+                  {product.subtitle && <span>{product.subtitle}</span>}
                 </div>
               </button>
             ))}
@@ -268,77 +280,62 @@ function App() {
         </section>
       )}
 
-      {screen === 'product' && selected && (
-        <ProductScreen
-          product={selected}
-          onAdd={() => addToCart(selected.id)}
-          onGoCart={() => setScreen('cart')}
-        />
-      )}
-
-      {screen === 'cart' && (
+      {screen === 'extras' && (
         <section className="screen">
-          <h1 className="screen-title">Корзина</h1>
-          {!cart.length && <p className="muted">Пока пусто — добавьте товары из каталога.</p>}
-          <div className="cart-list">
-            {cart.map((item) => {
-              const product = PRODUCT_MAP[item.productId];
+          <h1 className="screen-title">Добавить плюшки</h1>
+          <p className="muted screen-lead">
+            Выбрано: {selectedBox ? PRODUCT_MAP[selectedBox.productId].title : '—'}
+          </p>
+          <div className="extras-list">
+            {EXTRAS.map((product) => {
+              const active = hasExtra(product.id);
               return (
-                <div key={item.productId} className="cart-row">
+                <button
+                  key={product.id}
+                  className={`extra-card ${active ? 'active' : ''}`}
+                  onClick={() => toggleExtra(product.id)}
+                >
                   <img src={product.image} alt={product.title} />
-                  <div className="cart-info">
+                  <div className="extra-card-body">
                     <b>{product.title}</b>
-                    <span>{formatPrice(product.price)}</span>
-                    <div className="qty">
-                      <button type="button" onClick={() => setQuantity(item.productId, item.quantity - 1)}>−</button>
-                      <span>{item.quantity}</span>
-                      <button type="button" onClick={() => setQuantity(item.productId, item.quantity + 1)}>+</button>
-                    </div>
+                    <strong>{formatPrice(product.price)}</strong>
                   </div>
-                  <strong>{formatPrice(product.price * item.quantity)}</strong>
-                </div>
+                  <span className="extra-check">{active ? '✓' : '+'}</span>
+                </button>
               );
             })}
           </div>
-          {!!cart.length && (
-            <>
-              <div className="total-row">
-                <span>Итого</span>
-                <b>{formatPrice(total)}</b>
-              </div>
-              {error && <div className="error">{error}</div>}
-              <button className="btn btn-primary btn-large" onClick={goCheckout}>Оформить</button>
-            </>
-          )}
-          {!cart.length && (
-            <button className="btn btn-primary btn-large" onClick={() => setScreen('catalog')}>В каталог</button>
-          )}
+          <div className="total-row">
+            <span>Товары</span>
+            <b>{formatPrice(productsTotal)}</b>
+          </div>
+          {error && <div className="error">{error}</div>}
+          <button className="btn btn-primary btn-large" onClick={goCheckout}>К оформлению</button>
+          <button className="btn btn-outline" onClick={goCheckout}>Пропустить плюшки</button>
         </section>
       )}
 
       {screen === 'checkout' && (
         <section className="screen card-panel">
-          <h1 className="screen-title">Доставка</h1>
-          {needsApartment && (
-            <>
-              <label className="field">Номер квартиры
-                <input
-                  disabled={checkout.noApartmentNumber}
-                  value={checkout.apartmentNumber}
-                  onChange={(e) => updateCheckout('apartmentNumber', e.target.value)}
-                  placeholder="Например, 48"
-                />
-              </label>
-              <label className="check">
-                <input
-                  type="checkbox"
-                  checked={checkout.noApartmentNumber}
-                  onChange={(e) => updateCheckout('noApartmentNumber', e.target.checked)}
-                />
-                Номер не нужен
-              </label>
-            </>
-          )}
+          <h1 className="screen-title">Оформление</h1>
+
+          <label className="field">Номер квартиры для наклейки
+            <input
+              disabled={checkout.noApartmentNumber}
+              value={checkout.apartmentNumber}
+              onChange={(e) => updateCheckout('apartmentNumber', e.target.value)}
+              placeholder="Например, 48"
+            />
+          </label>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={checkout.noApartmentNumber}
+              onChange={(e) => updateCheckout('noApartmentNumber', e.target.checked)}
+            />
+            Номер не нужен
+          </label>
+
           <label className="field">Имя
             <input value={checkout.name} onChange={(e) => updateCheckout('name', e.target.value)} placeholder="Например, Анна Иванова" />
           </label>
@@ -348,18 +345,85 @@ function App() {
           <label className="field">Город
             <input value={checkout.city} onChange={(e) => updateCheckout('city', e.target.value)} />
           </label>
-          <label className="field">Адрес / ПВЗ
-            <textarea value={checkout.address} onChange={(e) => updateCheckout('address', e.target.value)} placeholder="Улица, дом, квартира или пункт выдачи" />
-          </label>
+
           <label className="field">Тип доставки
-            <select value={checkout.deliveryType} onChange={(e) => updateCheckout('deliveryType', e.target.value as DeliveryType)}>
-              <option value="moscow-courier">Москва — доставка курьером</option>
-              <option value="pickup-point">Регион — отправка в ПВЗ</option>
+            <select
+              value={checkout.deliveryType}
+              onChange={(e) => updateCheckout('deliveryType', e.target.value as DeliveryType)}
+            >
+              <option value="moscow-courier">Москва — курьером · {formatPrice(DELIVERY_PRICES['moscow-courier'])}</option>
+              <option value="pickup-point">ПВЗ Яндекс.Маркета · {formatPrice(DELIVERY_PRICES['pickup-point'])}</option>
             </select>
           </label>
-          <label className="field">Комментарий
-            <textarea value={checkout.comment} onChange={(e) => updateCheckout('comment', e.target.value)} placeholder="Код домофона, удобное время, пожелания" />
+
+          <label className="field">
+            {checkout.deliveryType === 'pickup-point' ? 'Адрес ПВЗ' : 'Адрес доставки'}
+            <textarea
+              value={checkout.address}
+              onChange={(e) => updateCheckout('address', e.target.value)}
+              placeholder={addressPlaceholder}
+            />
           </label>
+
+          <label className="field">Комментарий
+            <textarea
+              value={checkout.comment}
+              onChange={(e) => updateCheckout('comment', e.target.value)}
+              placeholder="Код от домофона, нужен ли пропуск, пожелания"
+            />
+          </label>
+
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={checkout.isGift}
+              onChange={(e) => updateCheckout('isGift', e.target.checked)}
+            />
+            Покупаете в подарок?
+          </label>
+          {checkout.isGift && (
+            <label className="field">Текст для открытки
+              <textarea
+                value={checkout.giftMessage}
+                onChange={(e) => updateCheckout('giftMessage', e.target.value)}
+                placeholder="Напишите любое сообщение — мы вложим открытку с пожеланием"
+              />
+            </label>
+          )}
+
+          <label className="check legal">
+            <input
+              type="checkbox"
+              checked={checkout.agreePrivacy}
+              onChange={(e) => updateCheckout('agreePrivacy', e.target.checked)}
+            />
+            <span>
+              Согласие на{' '}
+              <a href={PRIVACY_URL} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+                обработку персональных данных
+              </a>
+            </span>
+          </label>
+          <label className="check legal">
+            <input
+              type="checkbox"
+              checked={checkout.agreeOffer}
+              onChange={(e) => updateCheckout('agreeOffer', e.target.checked)}
+            />
+            <span>
+              Ознакомлен и согласен с{' '}
+              <a href={OFFER_URL} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+                условиями оферты
+              </a>
+            </span>
+          </label>
+
+          <div className="summary compact">
+            <Row label="Товары" value={formatPrice(productsTotal)} />
+            <Row label="Доставка" value={formatPrice(deliveryPrice)} />
+            <Row label="Итого" value={formatPrice(total)} />
+          </div>
+
           {error && <div className="error">{error}</div>}
           <button className="btn btn-primary btn-large" onClick={goPay}>К оплате · {formatPrice(total)}</button>
         </section>
@@ -376,6 +440,7 @@ function App() {
                 value={formatPrice(PRODUCT_MAP[item.productId].price * item.quantity)}
               />
             ))}
+            <Row label="Доставка" value={formatPrice(deliveryPrice)} />
             <Row label="Сумма" value={formatPrice(total)} />
           </div>
 
@@ -422,7 +487,7 @@ function App() {
                 ? 'Откроется страница ЮKassa. После оплаты мы пришлём подтверждение в Telegram.'
                 : 'Мы получили заявку и свяжемся с вами в Telegram или по телефону.'}
           </p>
-          <button className="btn btn-primary btn-large" onClick={() => tg?.close?.() || setScreen('catalog')}>
+          <button className="btn btn-primary btn-large" onClick={() => tg?.close?.() || setScreen('home')}>
             Закрыть
           </button>
         </section>
@@ -431,63 +496,13 @@ function App() {
   );
 }
 
-function TopBar({
-  count,
-  onCatalog,
-  onCart,
-  showBack,
-  onBack
-}: {
-  count: number;
-  onCatalog: () => void;
-  onCart: () => void;
-  showBack: boolean;
-  onBack: () => void;
-}) {
+function TopBar({ onBack }: { onBack: () => void }) {
   return (
     <header className="topbar">
-      {showBack ? (
-        <button className="icon-btn" onClick={onBack} aria-label="Назад">←</button>
-      ) : (
-        <button className="brand-chip" onClick={onCatalog}>Курьерка</button>
-      )}
-      <button className="cart-btn" onClick={onCart}>
-        Корзина{count > 0 ? ` · ${count}` : ''}
-      </button>
+      <button className="icon-btn" onClick={onBack} aria-label="Назад">←</button>
+      <img className="top-logo" src="/products/logo.svg" alt="Курьерка" />
+      <div className="topbar-spacer" />
     </header>
-  );
-}
-
-function ProductScreen({
-  product,
-  onAdd,
-  onGoCart
-}: {
-  product: Product;
-  onAdd: () => void;
-  onGoCart: () => void;
-}) {
-  return (
-    <section className="screen">
-      <div className="product-hero">
-        <img src={product.image} alt={product.title} />
-      </div>
-      <div className="card-panel product-details">
-        <h1>{product.title}</h1>
-        <strong className="price">{formatPrice(product.price)}</strong>
-        <p>{product.description}</p>
-        {product.includes && (
-          <>
-            <p className="section-label">Комплектация</p>
-            <ul className="includes">
-              {product.includes.map((line) => <li key={line}>{line}</li>)}
-            </ul>
-          </>
-        )}
-        <button className="btn btn-primary btn-large" onClick={onAdd}>В корзину</button>
-        <button className="btn btn-outline" onClick={onGoCart}>Перейти в корзину</button>
-      </div>
-    </section>
   );
 }
 

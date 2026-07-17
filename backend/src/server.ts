@@ -3,7 +3,7 @@ import cors from 'cors';
 import express from 'express';
 import { isValid } from '@tma.js/init-data-node';
 import { z } from 'zod';
-import { PRODUCTS, PRODUCT_IDS } from './catalog.js';
+import { DELIVERY_PRICES, PRODUCTS, PRODUCT_IDS } from './catalog.js';
 import { createYookassaPayment, isYookassaConfigured, type YookassaNotification } from './yookassa.js';
 import { handleTelegramUpdate, sendTelegramMessage as sendBotMessage, setupTelegramWebhook, type TelegramUpdate } from './telegram.js';
 
@@ -37,6 +37,10 @@ const OrderSchema = z.object({
   address: z.string().min(5).max(250),
   deliveryType: z.enum(['moscow-courier', 'pickup-point']),
   comment: z.string().max(500).optional().default(''),
+  isGift: z.boolean().optional().default(false),
+  giftMessage: z.string().max(500).optional().default(''),
+  agreePrivacy: z.literal(true),
+  agreeOffer: z.literal(true),
   paymentMethod: z.enum(['request', 'yookassa'])
 });
 
@@ -88,13 +92,26 @@ function orderHasBox(order: Order) {
   return order.items.some((item) => PRODUCTS[item.productId].kind === 'box');
 }
 
-function getOrderTotal(order: Order) {
+function getProductsTotal(order: Order) {
   return order.items.reduce((sum, item) => sum + PRODUCTS[item.productId].price * item.quantity, 0);
 }
 
+function getDeliveryPrice(order: Order) {
+  return DELIVERY_PRICES[order.deliveryType];
+}
+
+function getOrderTotal(order: Order) {
+  return getProductsTotal(order) + getDeliveryPrice(order);
+}
+
 function formatOrderMessage(order: Order, orderId: string, user: any, extra = '') {
+  const productsTotal = getProductsTotal(order);
+  const deliveryPrice = getDeliveryPrice(order);
   const total = getOrderTotal(order);
   const paymentLabel = order.paymentMethod === 'yookassa' ? 'Оплата картой (ЮKassa)' : 'Заявка без онлайн-оплаты';
+  const deliveryLabel = order.deliveryType === 'moscow-courier'
+    ? 'Москва — курьером'
+    : 'ПВЗ Яндекс.Маркета';
   const itemLines = order.items.map((item) => {
     const product = PRODUCTS[item.productId];
     const lineTotal = product.price * item.quantity;
@@ -106,7 +123,7 @@ function formatOrderMessage(order: Order, orderId: string, user: any, extra = ''
     : 'Telegram: dev/test mode';
 
   const apartmentLine = orderHasBox(order)
-    ? `Номер квартиры: ${order.noApartmentNumber ? 'не нужен' : order.apartmentNumber || 'не указан'}`
+    ? `Номер квартиры для наклейки: ${order.noApartmentNumber ? 'не нужен' : order.apartmentNumber || 'не указан'}`
     : '';
 
   return [
@@ -120,10 +137,14 @@ function formatOrderMessage(order: Order, orderId: string, user: any, extra = ''
     `Имя: ${order.name}`,
     `Телефон: ${order.phone}`,
     `Город: ${order.city}`,
-    `Адрес/ПВЗ: ${order.address}`,
-    `Доставка: ${order.deliveryType}`,
+    `Доставка: ${deliveryLabel}`,
+    `Адрес: ${order.address}`,
     `Оплата: ${paymentLabel}`,
-    `Сумма: ${total.toLocaleString('ru-RU')} ₽`,
+    `Товары: ${productsTotal.toLocaleString('ru-RU')} ₽`,
+    `Доставка: ${deliveryPrice.toLocaleString('ru-RU')} ₽`,
+    `Итого: ${total.toLocaleString('ru-RU')} ₽`,
+    order.isGift ? `Подарок: да` : '',
+    order.isGift && order.giftMessage ? `Открытка: ${order.giftMessage}` : '',
     order.comment ? `Комментарий: ${order.comment}` : '',
     '',
     userLine
@@ -202,7 +223,13 @@ app.post('/api/orders', async (req, res) => {
     const order = OrderSchema.parse(orderData);
 
     if (orderHasBox(order) && !order.noApartmentNumber && !order.apartmentNumber.trim()) {
-      return res.status(400).json({ ok: false, error: 'Укажите номер квартиры или отметьте, что номер не нужен' });
+      return res.status(400).json({ ok: false, error: 'Укажите номер квартиры для наклейки или отметьте, что номер не нужен' });
+    }
+    if (order.isGift && order.giftMessage.trim().length < 2) {
+      return res.status(400).json({ ok: false, error: 'Напишите пожелание для открытки' });
+    }
+    if (!order.items.some((item) => PRODUCTS[item.productId].kind === 'box')) {
+      return res.status(400).json({ ok: false, error: 'В заказе должна быть Курьерка' });
     }
 
     const orderId = String(Date.now()).slice(-6);
