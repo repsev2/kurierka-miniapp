@@ -246,7 +246,6 @@ function App() {
 
       {screen === 'home' && (
         <section className="hero-screen">
-          <img className="site-logo" src="/products/logo.svg" alt="Курьерка" />
           <div className="hero-photo-wrap">
             <img className="hero-photo" src="/products/hero.jpg" alt="Курьерка" />
             <div className="hero-dim" />
