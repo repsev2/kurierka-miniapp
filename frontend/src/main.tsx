@@ -246,12 +246,12 @@ function App() {
 
       {screen === 'home' && (
         <section className="hero-screen">
+          <img className="site-logo" src="/products/logo.svg" alt="Курьерка" />
           <div className="hero-photo-wrap">
             <img className="hero-photo" src="/products/hero.jpg" alt="Курьерка" />
             <div className="hero-dim" />
           </div>
           <div className="hero-overlay">
-            <img className="site-logo" src="/products/logo.svg" alt="Курьерка" />
             <h1>Курьерка</h1>
             <p>Курьеры оставляют ваши заказы в Курьерке — вы забираете их, когда вам удобно</p>
             <button className="btn btn-primary btn-large" onClick={() => setScreen('boxes')}>
