@@ -1,6 +1,24 @@
+@font-face {
+  font-family: "Racama";
+  src: url("/fonts/Racama.woff") format("woff");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Poppins";
+  src: url("/fonts/Poppins-Regular.woff") format("woff");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
-  font-family: "SF Pro Display", "Segoe UI", system-ui, -apple-system, sans-serif;
+  font-family: "Poppins", Arial, sans-serif;
   color: #F7F2EA;
+  --font-text: "Poppins", Arial, sans-serif;
+  --font-headline: "Racama", Arial, sans-serif;
   --bg: #1C1A19;
   --bg-elevated: #2A2624;
   --orange: #FF7000;
@@ -14,6 +32,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: #F7F2EA;
+  font-family: var(--font-text);
 }
 button, input, textarea, select { font: inherit; color: inherit; }
 button { cursor: pointer; border: 0; background: none; }
@@ -67,7 +86,7 @@ a { color: var(--orange); }
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 12px 1cm 0;
+  padding: 12px 0 0;
   min-height: 0;
 }
 .hero-photo {
@@ -100,6 +119,8 @@ a { color: var(--orange); }
   margin: 0 0 12px;
   font-size: 36px;
   letter-spacing: -0.03em;
+  font-family: var(--font-headline);
+  font-weight: 500;
 }
 .hero-overlay p {
   margin: 0 auto 22px;
@@ -114,6 +135,8 @@ a { color: var(--orange); }
   margin: 0 0 6px;
   font-size: 28px;
   letter-spacing: -0.03em;
+  font-family: var(--font-headline);
+  font-weight: 500;
 }
 .screen-lead { margin: 0 0 16px; }
 
@@ -191,7 +214,8 @@ a { color: var(--orange); }
   width: 100%;
   min-height: 54px;
   border-radius: 18px;
-  font-weight: 800;
+  font-family: var(--font-headline);
+  font-weight: 500;
   display: inline-flex;
   align-items: center;
   justify-content: center;
