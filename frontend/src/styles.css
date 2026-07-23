@@ -105,7 +105,7 @@ a { color: var(--orange); }
 }
 .hero-overlay {
   position: relative;
-  padding: 12px 20px calc(36px + 1cm);
+  padding: 12px 20px calc(36px + 1.5cm);
   text-align: center;
   background: linear-gradient(180deg, transparent, #0E0D0C 18%);
 }
